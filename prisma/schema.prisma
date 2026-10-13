@@ -1,0 +1,208 @@
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+enum Role {
+  OWNER
+  INSPECTOR
+  ADMIN
+  PROVIDER
+}
+
+enum InspectionStatus {
+  SCHEDULED
+  IN_PROGRESS
+  SUBMITTED
+}
+
+enum CheckStatus {
+  PASS
+  FAIL
+  ATTENTION
+}
+
+enum IssueCategory {
+  LEAK
+  ELECTRICAL
+  SECURITY
+  CLEANLINESS
+  OTHER
+}
+
+enum IssueStatus {
+  FLAGGED
+  APPROVED
+  DECLINED
+  CLOSED
+}
+
+enum RepairStatus {
+  REQUESTED
+  ASSIGNED
+  IN_PROGRESS
+  COMPLETED
+}
+
+model User {
+  id              String           @id @default(uuid()) @db.Uuid
+  name            String
+  email           String           @unique
+  passwordHash    String           @map("password_hash")
+  role            Role
+  phone           String?
+  createdAt       DateTime         @default(now()) @map("created_at")
+  properties      Property[]
+  inspections     Inspection[]     @relation("InspectorInspections")
+  serviceProvider ServiceProvider?
+  flaggedIssues   Issue[]          @relation("InspectorIssues")
+  notifications   Notification[]
+  auditLogs       AuditLog[]
+
+  @@map("users")
+}
+
+model Property {
+  id            String       @id @default(uuid()) @db.Uuid
+  ownerId       String       @map("owner_id") @db.Uuid
+  address       String
+  type          String       // "Apartment" | "Villa" | "Plot"
+  coverPhotoUrl String       @map("cover_photo_url")
+  healthScore   Decimal?     @map("health_score") @db.Decimal(5, 2)
+  createdAt     DateTime     @default(now()) @map("created_at")
+  owner         User         @relation(fields: [ownerId], references: [id], onDelete: Restrict)
+  inspections   Inspection[]
+  issues        Issue[]
+
+  @@index([ownerId])
+  @@map("properties")
+}
+
+model Inspection {
+  id             String           @id @default(uuid()) @db.Uuid
+  propertyId     String           @map("property_id") @db.Uuid
+  inspectorId    String?          @map("inspector_id") @db.Uuid
+  scheduledDate  DateTime         @map("scheduled_date") @db.Date
+  recurrenceRule String?          @map("recurrence_rule")
+  status         InspectionStatus @default(SCHEDULED)
+  startedAt      DateTime?        @map("started_at")
+  submittedAt    DateTime?        @map("submitted_at")
+  property       Property         @relation(fields: [propertyId], references: [id], onDelete: Cascade)
+  inspector      User?            @relation("InspectorInspections", fields: [inspectorId], references: [id], onDelete: SetNull)
+  checklistItems ChecklistItem[]
+  report         InspectionReport?
+  issues         Issue[]
+
+  @@index([propertyId])
+  @@index([inspectorId])
+  @@index([scheduledDate(sort: Desc)])
+  @@map("inspections")
+}
+
+model ChecklistItem {
+  id           String       @id @default(uuid()) @db.Uuid
+  inspectionId String       @map("inspection_id") @db.Uuid
+  roomArea     String       @map("room_area")
+  itemName     String       @map("item_name")
+  status       CheckStatus?
+  mediaUrls    String[]     @default([]) @map("media_urls")
+  notes        String?
+  inspection   Inspection   @relation(fields: [inspectionId], references: [id], onDelete: Cascade)
+
+  @@index([inspectionId])
+  @@map("checklist_items")
+}
+
+model InspectionReport {
+  id           String     @id @default(uuid()) @db.Uuid
+  inspectionId String     @unique @map("inspection_id") @db.Uuid
+  generatedAt  DateTime   @default(now()) @map("generated_at")
+  summaryUrl   String?    @map("summary_url")
+  inspection   Inspection @relation(fields: [inspectionId], references: [id], onDelete: Cascade)
+
+  @@map("inspection_reports")
+}
+
+model Issue {
+  id             String        @id @default(uuid()) @db.Uuid
+  inspectionId   String        @map("inspection_id") @db.Uuid
+  propertyId     String        @map("property_id") @db.Uuid
+  category       IssueCategory
+  description    String
+  mediaUrls      String[]      @map("media_urls")
+  status         IssueStatus   @default(FLAGGED)
+  flaggedBy      String        @map("flagged_by") @db.Uuid
+  decisionReason String?       @map("decision_reason")
+  createdAt      DateTime      @default(now()) @map("created_at")
+  inspection     Inspection    @relation(fields: [inspectionId], references: [id], onDelete: Cascade)
+  property       Property      @relation(fields: [propertyId], references: [id], onDelete: Cascade)
+  inspector      User          @relation("InspectorIssues", fields: [flaggedBy], references: [id])
+  repair         Repair?
+
+  @@index([propertyId])
+  @@index([status])
+  @@map("issues")
+}
+
+model Repair {
+  id               String           @id @default(uuid()) @db.Uuid
+  issueId          String           @unique @map("issue_id") @db.Uuid
+  providerId       String?          @map("provider_id") @db.Uuid
+  status           RepairStatus     @default(REQUESTED)
+  costEstimate     Decimal?         @map("cost_estimate") @db.Decimal(10, 2)
+  completionNotes  String?          @map("completion_notes")
+  completionPhotos String[]         @default([]) @map("completion_photos")
+  createdAt        DateTime         @default(now()) @map("created_at")
+  updatedAt        DateTime         @default(now()) @updatedAt @map("updated_at")
+  issue            Issue            @relation(fields: [issueId], references: [id], onDelete: Cascade)
+  provider         ServiceProvider? @relation(fields: [providerId], references: [id], onDelete: SetNull)
+
+  @@index([providerId])
+  @@index([status])
+  @@map("repairs")
+}
+
+model ServiceProvider {
+  id           String    @id @default(uuid()) @db.Uuid
+  userId       String    @unique @map("user_id") @db.Uuid
+  serviceTypes String[]  @map("service_types")
+  locality     String
+  verified     Boolean   @default(false)
+  rating       Decimal?  @db.Decimal(3, 2)
+  user         User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  repairs      Repair[]
+
+  @@index([verified, locality])
+  @@map("service_providers")
+}
+
+model Notification {
+  id        String   @id @default(uuid()) @db.Uuid
+  userId    String   @map("user_id") @db.Uuid
+  type      String   // "REPORT_READY" | "ISSUE_FLAGGED" | "REPAIR_STATUS_UPDATED"
+  payload   Json
+  read      Boolean  @default(false)
+  createdAt DateTime @default(now()) @map("created_at")
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, read])
+  @@map("notifications")
+}
+
+model AuditLog {
+  id         String   @id @default(uuid()) @db.Uuid
+  entityType String   @map("entity_type")
+  entityId   String   @map("entity_id") @db.Uuid
+  action     String   // "APPROVED" | "ASSIGNED" | "STATUS_CHANGED"
+  actorId    String   @map("actor_id") @db.Uuid
+  metadata   Json?
+  timestamp  DateTime @default(now())
+  actor      User     @relation(fields: [actorId], references: [id])
+
+  @@index([entityType, entityId])
+  @@map("audit_logs")
+}
