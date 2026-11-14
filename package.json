@@ -17,7 +17,9 @@
     "prisma:seed": "ts-node prisma/seed.ts",
     "prisma:studio": "prisma studio",
     "prisma:deploy": "prisma migrate deploy",
-    "db:reset": "prisma migrate reset --force"
+    "db:reset": "prisma migrate reset --force",
+    "build:render": "npm ci --include=dev && npx prisma generate && npm run build",
+    "start:render": "prisma migrate deploy && node dist/prisma/seed.js && node dist/src/main"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.565.0",
@@ -67,5 +69,8 @@
   },
   "prisma": {
     "seed": "ts-node prisma/seed.ts"
+  },
+  "engines": {
+    "node": ">=20"
   }
 }

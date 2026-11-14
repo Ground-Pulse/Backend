@@ -53,6 +53,11 @@ function statusesForScore(n: number, target: number): CheckStatus[] {
 const score = (s: CheckStatus[]) => Math.round((s.reduce((a, x) => a + (x === 'PASS' ? 1 : x === 'ATTENTION' ? 0.5 : 0), 0) / s.length) * 100);
 
 async function main() {
+  // Used on deploy: seed a fresh database once, never wipe a live one.
+  if (process.env.SEED_ONLY_IF_EMPTY === 'true' && (await prisma.user.count()) > 0) {
+    console.log('🌱 Database already has data — skipping seed.');
+    return;
+  }
   console.log('🌱 Seeding GroundPulse demo data…');
 
   // wipe in dependency order

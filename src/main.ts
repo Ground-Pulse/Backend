@@ -46,9 +46,14 @@ async function bootstrap() {
 
   app.enableCors({
     origin: (origin, callback) => {
-      // allow requests with no origin (like mobile apps, curl, server-to-server)
-      // no origin = curl / server-to-server; otherwise only the configured frontends
-      if (!origin || allowedOrigins.includes(origin) || allowedOrigins.includes('*')) {
+      // no origin = curl / server-to-server; otherwise only the configured frontends.
+      // Entries may use one wildcard label, e.g. https://*.vercel.app for preview deploys.
+      const escape = (x: string) => x.replace(/[.+?^${}()|[\]\\]/g, '\\$&');
+      const matches = (pattern: string) =>
+        pattern === '*' ||
+        pattern === origin ||
+        (pattern.includes('*') && new RegExp('^' + pattern.split('*').map(escape).join('[a-z0-9-]+') + '$').test(origin!));
+      if (!origin || allowedOrigins.some(matches)) {
         callback(null, true);
       } else {
         callback(new Error(`Origin ${origin} not allowed by CORS`), false);
@@ -74,7 +79,8 @@ async function bootstrap() {
   // Standardized GroundPulse Error Handling
   app.useGlobalFilters(new GlobalExceptionFilter());
 
-  await app.listen(port);
+  app.enableShutdownHooks();
+  await app.listen(port, '0.0.0.0');
   console.log(`🚀 GroundPulse Backend API is running on: http://localhost:${port}`);
 }
 

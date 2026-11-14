@@ -16,6 +16,7 @@ import { AdminModule } from './modules/admin/admin.module';
 import { MediaModule } from './modules/media/media.module';
 import { JobsModule } from './modules/jobs/jobs.module';
 import { TransformInterceptor } from './common/interceptors/transform.interceptor';
+import { HealthController } from './health.controller';
 
 @Module({
   imports: [
@@ -64,13 +65,17 @@ import { TransformInterceptor } from './common/interceptors/transform.intercepto
         let host = 'localhost';
         let port = 6379;
         let password: string | undefined;
+        let username: string | undefined;
+        let tls: Record<string, never> | undefined;
 
         try {
           const parsed = new URL(redisUrl);
           host = parsed.hostname || 'localhost';
           port = parsed.port ? parseInt(parsed.port, 10) : 6379;
+          if (parsed.username) username = decodeURIComponent(parsed.username);
+          if (parsed.protocol === 'rediss:') tls = {};
           if (parsed.password) {
-            password = parsed.password;
+            password = decodeURIComponent(parsed.password);
           }
         } catch {
           // fallback to defaults
@@ -81,6 +86,8 @@ import { TransformInterceptor } from './common/interceptors/transform.intercepto
             host,
             port,
             password,
+            username,
+            tls,
             maxRetriesPerRequest: null,
             enableReadyCheck: false,
           },
@@ -101,6 +108,7 @@ import { TransformInterceptor } from './common/interceptors/transform.intercepto
     MediaModule,
     JobsModule,
   ],
+  controllers: [HealthController],
   providers: [
     {
       provide: APP_GUARD,

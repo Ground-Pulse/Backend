@@ -45,7 +45,7 @@ export class MediaService {
   }
 
   private apiUrl() {
-    return (this.config.get<string>('API_PUBLIC_URL') || `http://localhost:${this.config.get('PORT') || 3001}`).replace(/\/$/, '');
+    return (this.config.get<string>('API_PUBLIC_URL') || process.env.RENDER_EXTERNAL_URL || `http://localhost:${this.config.get('PORT') || 3001}`).replace(/\/$/, '');
   }
 
   private sign(key: string, exp: number) {
