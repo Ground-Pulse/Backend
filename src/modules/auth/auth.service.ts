@@ -2,13 +2,17 @@ import { Injectable } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { ConfigService } from '@nestjs/config';
 import * as bcrypt from 'bcrypt';
+import { NotificationChannel, Role, User } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
 import { RegisterDto } from './dto/register.dto';
 import { LoginDto } from './dto/login.dto';
 import { RefreshTokenDto } from './dto/refresh-token.dto';
+import { UpdatePreferencesDto, UpdateProfileDto } from './dto/profile.dto';
 import { GroundPulseException } from '../../common/exceptions/ground-pulse.exception';
-import { Role, User } from '@prisma/client';
 import { JwtPayload } from './jwt.strategy';
+import { publicUser } from '../../common/views';
+import { writeAudit } from '../../common/audit';
+import { NotificationService } from '../notification/notification.service';
 
 @Injectable()
 export class AuthService {
@@ -16,176 +20,123 @@ export class AuthService {
     private prisma: PrismaService,
     private jwtService: JwtService,
     private configService: ConfigService,
+    private notifications: NotificationService,
   ) {}
 
+  /** Owners are active immediately; inspectors/providers wait for admin verification. */
   async register(dto: RegisterDto) {
-    const existing = await this.prisma.user.findUnique({
-      where: { email: dto.email.toLowerCase() },
-    });
-    if (existing) {
-      throw GroundPulseException.emailAlreadyExists();
+    const email = dto.email.toLowerCase().trim();
+    if (await this.prisma.user.findUnique({ where: { email } })) {
+      throw GroundPulseException.emailAlreadyExists('An account with this email already exists.');
     }
-
-    const saltRounds = 10;
-    const passwordHash = await bcrypt.hash(dto.password, saltRounds);
+    const passwordHash = await bcrypt.hash(dto.password, 10);
 
     const user = await this.prisma.$transaction(async (tx) => {
-      const createdUser = await tx.user.create({
+      const created = await tx.user.create({
         data: {
-          name: dto.name,
-          email: dto.email.toLowerCase(),
+          name: dto.name.trim(),
+          email,
           passwordHash,
           role: dto.role,
-          phone: dto.phone,
+          phone: dto.phone?.trim() || null,
+          verified: dto.role === Role.OWNER,
         },
       });
-
       if (dto.role === Role.PROVIDER) {
         await tx.serviceProvider.create({
           data: {
-            userId: createdUser.id,
-            serviceTypes: ['General Maintenance'],
-            locality: 'Bangalore',
+            userId: created.id,
+            serviceTypes: dto.serviceTypes?.length ? dto.serviceTypes : ['General Repairs'],
+            locality: dto.locality?.trim() || 'Bengaluru',
             verified: false,
           },
         });
       }
-
-      await tx.auditLog.create({
-        data: {
-          entityType: 'USER',
-          entityId: createdUser.id,
-          action: 'REGISTERED',
-          actorId: createdUser.id,
-          metadata: { role: dto.role, email: dto.email },
-        },
-      });
-
-      return createdUser;
+      await writeAudit(tx, 'User', created.id, 'REGISTERED', created.id, { role: dto.role });
+      return created;
     });
 
-    const tokens = await this.generateTokens(user);
-    return {
-      ...tokens,
-      user: {
-        id: user.id,
-        name: user.name,
-        email: user.email,
-        role: user.role,
-      },
-    };
+    if (user.role !== Role.OWNER) {
+      await this.notifications.notifyAdmins(
+        'ACCOUNT_VERIFIED',
+        'New verification request',
+        `${user.name} signed up as ${user.role.toLowerCase()}.`,
+        '/admin/verification',
+      );
+      await this.notifications.dashboardChanged();
+    }
+
+    return { ...(await this.generateTokens(user)), user: publicUser(user) };
   }
 
   async login(dto: LoginDto) {
-    const user = await this.prisma.user.findUnique({
-      where: { email: dto.email.toLowerCase() },
-      include: { serviceProvider: true },
-    });
-
-    if (!user) {
+    const user = await this.prisma.user.findUnique({ where: { email: dto.email.toLowerCase().trim() } });
+    if (!user || !(await bcrypt.compare(dto.password, user.passwordHash))) {
       throw GroundPulseException.invalidCredentials();
     }
-
-    const isMatch = await bcrypt.compare(dto.password, user.passwordHash);
-    if (!isMatch) {
-      throw GroundPulseException.invalidCredentials();
-    }
-
-    const tokens = await this.generateTokens(user);
-    return {
-      ...tokens,
-      user: {
-        id: user.id,
-        name: user.name,
-        email: user.email,
-        role: user.role,
-        serviceProvider: user.serviceProvider,
-      },
-    };
+    return { ...(await this.generateTokens(user)), user: publicUser(user) };
   }
 
   async refresh(dto: RefreshTokenDto) {
+    let payload: JwtPayload;
     try {
-      const payload = this.jwtService.verify<JwtPayload>(dto.refreshToken, {
-        secret: this.configService.get<string>('JWT_SECRET') || 'super-secret-jwt-key',
-      });
-
-      if (payload.type !== 'refresh') {
-        throw GroundPulseException.unauthorized('Invalid refresh token');
-      }
-
-      const user = await this.prisma.user.findUnique({
-        where: { id: payload.sub },
-      });
-
-      if (!user) {
-        throw GroundPulseException.unauthorized('User not found');
-      }
-
-      const tokens = await this.generateTokens(user);
-      return {
-        ...tokens,
-        user: {
-          id: user.id,
-          name: user.name,
-          email: user.email,
-          role: user.role,
-        },
-      };
-    } catch (error) {
+      payload = this.jwtService.verify<JwtPayload>(dto.refreshToken, { secret: this.secret() });
+    } catch {
       throw GroundPulseException.unauthorized('Invalid or expired refresh token');
     }
+    if (payload.type !== 'refresh') throw GroundPulseException.unauthorized('Invalid refresh token');
+    const user = await this.prisma.user.findUnique({ where: { id: payload.sub } });
+    if (!user) throw GroundPulseException.unauthorized('User not found');
+    return { ...(await this.generateTokens(user)), user: publicUser(user) };
   }
 
   async getMe(userId: string) {
-    const user = await this.prisma.user.findUnique({
+    const user = await this.prisma.user.findUnique({ where: { id: userId } });
+    if (!user) throw GroundPulseException.unauthorized('User not found');
+    return publicUser(user);
+  }
+
+  async updateMe(userId: string, dto: UpdateProfileDto) {
+    const user = await this.prisma.user.update({
       where: { id: userId },
-      include: {
-        serviceProvider: true,
+      data: {
+        ...(dto.name?.trim() ? { name: dto.name.trim() } : {}),
+        ...(dto.phone !== undefined ? { phone: dto.phone.trim() || null } : {}),
       },
     });
+    return publicUser(user);
+  }
 
-    if (!user) {
-      throw GroundPulseException.unauthorized('User not found');
-    }
+  async getPreferences(userId: string) {
+    const pref = await this.prisma.userPreference.findUnique({ where: { userId } });
+    return { notificationChannel: pref?.notificationChannel ?? NotificationChannel.BOTH };
+  }
 
-    const { passwordHash, ...userWithoutPassword } = user;
-    return userWithoutPassword;
+  async updatePreferences(userId: string, dto: UpdatePreferencesDto) {
+    const pref = await this.prisma.userPreference.upsert({
+      where: { userId },
+      update: { notificationChannel: dto.notificationChannel },
+      create: { userId, notificationChannel: dto.notificationChannel },
+    });
+    return { notificationChannel: pref.notificationChannel };
+  }
+
+  private secret() {
+    return this.configService.get<string>('JWT_SECRET') || 'super-secret-jwt-key';
   }
 
   private async generateTokens(user: Pick<User, 'id' | 'email' | 'role'>) {
-    const secret = this.configService.get<string>('JWT_SECRET') || 'super-secret-jwt-key';
-    const accessExpiration = this.configService.get<string>('JWT_EXPIRATION') || '15m';
-    const refreshExpiration = this.configService.get<string>('REFRESH_TOKEN_EXPIRATION') || '7d';
-
-    const accessPayload: JwtPayload = {
-      sub: user.id,
-      email: user.email,
-      role: user.role,
-      type: 'access',
-    };
-
-    const refreshPayload: JwtPayload = {
-      sub: user.id,
-      email: user.email,
-      role: user.role,
-      type: 'refresh',
-    };
-
+    const base = { sub: user.id, email: user.email, role: user.role };
     const [accessToken, refreshToken] = await Promise.all([
-      this.jwtService.signAsync(accessPayload, {
-        secret,
-        expiresIn: accessExpiration,
+      this.jwtService.signAsync({ ...base, type: 'access' } satisfies JwtPayload, {
+        secret: this.secret(),
+        expiresIn: this.configService.get<string>('JWT_EXPIRATION') || '15m',
       }),
-      this.jwtService.signAsync(refreshPayload, {
-        secret,
-        expiresIn: refreshExpiration,
+      this.jwtService.signAsync({ ...base, type: 'refresh' } satisfies JwtPayload, {
+        secret: this.secret(),
+        expiresIn: this.configService.get<string>('REFRESH_TOKEN_EXPIRATION') || '7d',
       }),
     ]);
-
-    return {
-      accessToken,
-      refreshToken,
-    };
+    return { accessToken, refreshToken };
   }
 }

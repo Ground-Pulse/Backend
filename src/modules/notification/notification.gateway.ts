@@ -48,7 +48,7 @@ export class NotificationGateway implements OnGatewayConnection, OnGatewayDiscon
       client.data.userId = userId;
       client.data.role = payload.role;
 
-      // Auto-join room for user
+      // Every client joins only its own room — it can never receive another user's events
       await client.join(`user:${userId}`);
       this.logger.log(`Client connected: ${client.id} (User: ${userId}) joined room user:${userId}`);
     } catch (err: any) {
@@ -71,38 +71,5 @@ export class NotificationGateway implements OnGatewayConnection, OnGatewayDiscon
     if (this.server) {
       this.server.emit(event, data);
     }
-  }
-
-  emitRepairStatusUpdated(repairId: string, status: string, notifyUserIds?: string[]) {
-    const payload = { repairId, status };
-    if (notifyUserIds && notifyUserIds.length > 0) {
-      for (const uid of notifyUserIds) {
-        this.emitToUser(uid, 'repair.status.updated', payload);
-      }
-    } else {
-      this.broadcast('repair.status.updated', payload);
-    }
-  }
-
-  emitIssueFlagged(issueId: string, propertyId: string, notifyUserId?: string) {
-    const payload = { issueId, propertyId };
-    if (notifyUserId) {
-      this.emitToUser(notifyUserId, 'issue.flagged', payload);
-    } else {
-      this.broadcast('issue.flagged', payload);
-    }
-  }
-
-  emitReportReady(inspectionId: string, reportUrl: string, notifyUserId?: string) {
-    const payload = { inspectionId, reportUrl };
-    if (notifyUserId) {
-      this.emitToUser(notifyUserId, 'report.ready', payload);
-    } else {
-      this.broadcast('report.ready', payload);
-    }
-  }
-
-  emitNewNotification(userId: string, notification: { id: string; type: string; payload: any }) {
-    this.emitToUser(userId, 'notification.new', notification);
   }
 }

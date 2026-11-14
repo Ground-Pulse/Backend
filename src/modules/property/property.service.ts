@@ -1,189 +1,145 @@
 import { Injectable } from '@nestjs/common';
+import { InspectionStatus, IssueStatus, Prisma, Role } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
-import { CreatePropertyDto } from './dto/create-property.dto';
-import { UpdatePropertyDto } from './dto/update-property.dto';
-import { Role, User } from '@prisma/client';
 import { GroundPulseException } from '../../common/exceptions/ground-pulse.exception';
+import { AuthUser } from '../../common/access';
+import { writeAudit } from '../../common/audit';
+import { propertyInclude, toProperty } from '../../common/views';
+import { NotificationService } from '../notification/notification.service';
+import { CreateDocumentDto, CreatePropertyDto, UpdatePropertyDto } from './dto/property.dto';
 
 @Injectable()
 export class PropertyService {
-  constructor(private prisma: PrismaService) {}
+  constructor(
+    private prisma: PrismaService,
+    private notifications: NotificationService,
+  ) {}
 
-  async findAll(user: Omit<User, 'passwordHash'>) {
-    if (user.role === Role.ADMIN) {
-      return this.prisma.property.findMany({
-        include: {
-          owner: {
-            select: { id: true, name: true, email: true, phone: true },
-          },
-          _count: {
-            select: { inspections: true, issues: true },
-          },
-        },
-        orderBy: { createdAt: 'desc' },
-      });
-    }
-
-    if (user.role === Role.OWNER) {
-      return this.prisma.property.findMany({
-        where: { ownerId: user.id },
-        include: {
-          _count: {
-            select: { inspections: true, issues: true },
-          },
-        },
-        orderBy: { createdAt: 'desc' },
-      });
-    }
-
-    if (user.role === Role.INSPECTOR) {
-      return this.prisma.property.findMany({
-        where: {
-          inspections: {
-            some: { inspectorId: user.id },
-          },
-        },
-        include: {
-          owner: {
-            select: { id: true, name: true, email: true, phone: true },
-          },
-          _count: {
-            select: { inspections: true, issues: true },
-          },
-        },
-        orderBy: { createdAt: 'desc' },
-      });
-    }
-
-    // PROVIDER: properties related to their repairs
-    return this.prisma.property.findMany({
-      where: {
-        issues: {
-          some: {
-            repair: {
-              provider: {
-                userId: user.id,
-              },
-            },
-          },
-        },
-      },
-      include: {
-        owner: {
-          select: { id: true, name: true, email: true, phone: true },
-        },
-      },
-      orderBy: { createdAt: 'desc' },
+  /** Owner: own properties. Admin: all. */
+  async findAll(user: AuthUser) {
+    if (user.role !== Role.OWNER && user.role !== Role.ADMIN) throw GroundPulseException.forbidden();
+    const rows = await this.prisma.property.findMany({
+      where: { archived: false, ...(user.role === Role.OWNER ? { ownerId: user.id } : {}) },
+      include: propertyInclude,
+      orderBy: { createdAt: 'asc' },
     });
+    return rows.map(toProperty);
   }
 
-  async create(user: Omit<User, 'passwordHash'>, dto: CreatePropertyDto) {
-    const property = await this.prisma.$transaction(async (tx) => {
+  async getRow(id: string) {
+    const p = await this.prisma.property.findUnique({ where: { id }, include: propertyInclude });
+    if (!p) throw GroundPulseException.propertyNotFound();
+    return p;
+  }
+
+  /** Owner of the property, admins, or an inspector assigned to one of its inspections. */
+  async assertCanView(user: AuthUser, p: { id: string; ownerId: string }) {
+    if (user.role === Role.ADMIN || (user.role === Role.OWNER && p.ownerId === user.id)) return;
+    if (user.role === Role.INSPECTOR) {
+      const assigned = await this.prisma.inspection.count({ where: { propertyId: p.id, inspectorId: user.id } });
+      if (assigned) return;
+    }
+    throw GroundPulseException.forbiddenNotOwner("You don't have access to this property.");
+  }
+
+  assertCanEdit(user: AuthUser, p: { ownerId: string }) {
+    if (user.role !== Role.ADMIN && p.ownerId !== user.id) throw GroundPulseException.forbiddenNotOwner("You don't own this property.");
+  }
+
+  async findOne(id: string, user: AuthUser) {
+    const p = await this.getRow(id);
+    await this.assertCanView(user, p);
+    return toProperty(p);
+  }
+
+  async create(user: AuthUser, dto: CreatePropertyDto) {
+    const p = await this.prisma.$transaction(async (tx) => {
       const created = await tx.property.create({
         data: {
           ownerId: user.id,
-          address: dto.address,
+          name: dto.name.trim(),
+          address: dto.address.trim(),
+          city: dto.city.trim(),
           type: dto.type,
           coverPhotoUrl: dto.coverPhotoUrl,
-          healthScore: null,
         },
+        include: propertyInclude,
       });
-
-      await tx.auditLog.create({
-        data: {
-          entityType: 'PROPERTY',
-          entityId: created.id,
-          action: 'CREATED',
-          actorId: user.id,
-          metadata: {
-            address: dto.address,
-            type: dto.type,
-          },
-        },
-      });
-
+      await writeAudit(tx, 'Property', created.id, 'CREATED', user.id, { address: created.address, type: created.type });
       return created;
     });
-
-    return property;
+    await this.notifications.dashboardChanged();
+    return toProperty(p);
   }
 
-  async findOne(id: string, user: Omit<User, 'passwordHash'>) {
-    const property = await this.prisma.property.findUnique({
-      where: { id },
-      include: {
-        owner: {
-          select: { id: true, name: true, email: true, phone: true },
-        },
-        inspections: {
-          orderBy: { scheduledDate: 'desc' },
-          take: 5,
-          include: {
-            inspector: {
-              select: { id: true, name: true, email: true },
-            },
-            report: true,
-          },
-        },
-        issues: {
-          where: {
-            status: { in: ['FLAGGED', 'APPROVED'] },
-          },
-          include: {
-            repair: true,
-          },
-          orderBy: { createdAt: 'desc' },
-        },
-      },
+  async update(id: string, user: AuthUser, dto: UpdatePropertyDto) {
+    const existing = await this.getRow(id);
+    this.assertCanEdit(user, existing);
+    const data: Prisma.PropertyUpdateInput = {};
+    for (const key of ['name', 'address', 'city', 'type', 'coverPhotoUrl'] as const) {
+      if (dto[key] !== undefined) data[key] = typeof dto[key] === 'string' ? dto[key]!.trim() : dto[key];
+    }
+    const p = await this.prisma.$transaction(async (tx) => {
+      const updated = await tx.property.update({ where: { id }, data, include: propertyInclude });
+      await writeAudit(tx, 'Property', id, 'UPDATED', user.id, {
+        before: { name: existing.name, address: existing.address, city: existing.city, type: existing.type },
+        after: dto as Record<string, unknown>,
+      });
+      return updated;
     });
-
-    if (!property) {
-      throw GroundPulseException.propertyNotFound();
-    }
-
-    if (user.role === Role.OWNER && property.ownerId !== user.id) {
-      throw GroundPulseException.forbiddenNotOwner();
-    }
-
-    return property;
+    return toProperty(p);
   }
 
-  async update(id: string, user: Omit<User, 'passwordHash'>, dto: UpdatePropertyDto) {
-    const property = await this.prisma.property.findUnique({
-      where: { id },
-    });
-
-    if (!property) {
-      throw GroundPulseException.propertyNotFound();
+  /** Archive only — never hard-delete while inspections/issues are open (DB lifecycle rules). */
+  async archive(id: string, user: AuthUser) {
+    const p = await this.getRow(id);
+    this.assertCanEdit(user, p);
+    const [openInspections, openIssues] = await Promise.all([
+      this.prisma.inspection.count({ where: { propertyId: id, status: { not: InspectionStatus.SUBMITTED } } }),
+      this.prisma.issue.count({ where: { propertyId: id, status: { in: [IssueStatus.FLAGGED, IssueStatus.APPROVED] } } }),
+    ]);
+    if (openInspections || openIssues) {
+      throw GroundPulseException.conflict('VALIDATION_ERROR', 'This property has open inspections or issues. Close them before archiving.');
     }
-
-    if (user.role !== Role.ADMIN && property.ownerId !== user.id) {
-      throw GroundPulseException.forbiddenNotOwner();
-    }
-
-    const updated = await this.prisma.$transaction(async (tx) => {
-      const res = await tx.property.update({
-        where: { id },
-        data: {
-          ...(dto.address && { address: dto.address }),
-          ...(dto.type && { type: dto.type }),
-          ...(dto.coverPhotoUrl && { coverPhotoUrl: dto.coverPhotoUrl }),
-        },
-      });
-
-      await tx.auditLog.create({
-        data: {
-          entityType: 'PROPERTY',
-          entityId: id,
-          action: 'UPDATED',
-          actorId: user.id,
-          metadata: dto as any,
-        },
-      });
-
-      return res;
+    await this.prisma.$transaction(async (tx) => {
+      await tx.property.update({ where: { id }, data: { archived: true } });
+      await writeAudit(tx, 'Property', id, 'ARCHIVED', user.id);
     });
+    return { ok: true };
+  }
 
-    return updated;
+  async healthHistory(id: string, user: AuthUser) {
+    const p = await this.getRow(id);
+    await this.assertCanView(user, p);
+    const rows = await this.prisma.inspection.findMany({
+      where: { propertyId: id, status: InspectionStatus.SUBMITTED, report: { isNot: null } },
+      include: { report: { select: { healthScore: true } } },
+      orderBy: { scheduledDate: 'asc' },
+    });
+    return rows.map((r) => ({ date: r.scheduledDate.toISOString(), score: r.report!.healthScore }));
+  }
+
+  async listDocuments(id: string, user: AuthUser) {
+    const p = await this.getRow(id);
+    await this.assertCanView(user, p);
+    const docs = await this.prisma.propertyDocument.findMany({ where: { propertyId: id }, orderBy: { uploadedAt: 'desc' } });
+    return docs.map((d) => ({ ...d, uploadedAt: d.uploadedAt.toISOString() }));
+  }
+
+  async addDocument(id: string, user: AuthUser, dto: CreateDocumentDto) {
+    const p = await this.getRow(id);
+    if (p.ownerId !== user.id) throw GroundPulseException.forbiddenNotOwner("You don't own this property.");
+    const d = await this.prisma.propertyDocument.create({
+      data: { propertyId: id, name: dto.name.trim(), kind: dto.kind ?? 'OTHER', url: dto.url, sizeBytes: dto.sizeBytes ?? 0 },
+    });
+    return { ...d, uploadedAt: d.uploadedAt.toISOString() };
+  }
+
+  async deleteDocument(docId: string, user: AuthUser) {
+    const d = await this.prisma.propertyDocument.findUnique({ where: { id: docId }, include: { property: { select: { ownerId: true } } } });
+    if (!d) throw GroundPulseException.notFound('Document not found.');
+    if (d.property.ownerId !== user.id) throw GroundPulseException.forbiddenNotOwner("You don't own this property.");
+    await this.prisma.propertyDocument.delete({ where: { id: docId } });
+    return { ok: true };
   }
 }

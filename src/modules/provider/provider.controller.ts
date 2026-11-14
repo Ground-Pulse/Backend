@@ -1,49 +1,26 @@
-import {
-  Controller,
-  Get,
-  Patch,
-  Param,
-  Body,
-  Query,
-  UseGuards,
-  ParseUUIDPipe,
-} from '@nestjs/common';
+import { Controller, Get, Query, UseGuards } from '@nestjs/common';
+import { Role } from '@prisma/client';
 import { ProviderService } from './provider.service';
-import { UpdateProviderDto } from './dto/update-provider.dto';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { RolesGuard } from '../../common/guards/roles.guard';
-import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { Roles } from '../../common/decorators/roles.decorator';
-import { Role } from '@prisma/client';
+import { CurrentUser } from '../../common/decorators/current-user.decorator';
 
 @Controller('providers')
 @UseGuards(JwtAuthGuard, RolesGuard)
 export class ProviderController {
-  constructor(private readonly providerService: ProviderService) {}
+  constructor(private readonly providers: ProviderService) {}
 
+  /** ?verified=true&locality=&serviceType= */
   @Get()
-  async findAll(@Query('verified') verified?: string) {
-    const verifiedOnly = verified === 'true';
-    return this.providerService.findAll(verifiedOnly);
-  }
-
-  @Get('my-repairs')
-  @Roles(Role.PROVIDER, Role.ADMIN)
-  async getMyRepairs(@CurrentUser('id') userId: string) {
-    return this.providerService.getMyRepairs(userId);
-  }
-
-  @Get(':id')
-  async findOne(@Param('id', ParseUUIDPipe) id: string) {
-    return this.providerService.findOne(id);
-  }
-
-  @Patch(':id')
   @Roles(Role.ADMIN)
-  async update(
-    @Param('id', ParseUUIDPipe) id: string,
-    @Body() dto: UpdateProviderDto,
-  ) {
-    return this.providerService.update(id, dto);
+  list(@Query('verified') verified?: string, @Query('locality') locality?: string, @Query('serviceType') serviceType?: string) {
+    return this.providers.list({ verified, locality, serviceType });
+  }
+
+  @Get('me')
+  @Roles(Role.PROVIDER)
+  me(@CurrentUser('id') userId: string) {
+    return this.providers.me(userId);
   }
 }

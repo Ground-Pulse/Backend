@@ -12,9 +12,10 @@ npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 
-# Prisma
-/prisma/migrations
 
 # OS metadata
 .DS_Store
 Thumbs.db
+
+# Local media uploads (MEDIA_DRIVER=local)
+/uploads

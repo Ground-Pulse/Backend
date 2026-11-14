@@ -1,69 +1,59 @@
-import {
-  Controller,
-  Get,
-  Post,
-  Patch,
-  Param,
-  Body,
-  Query,
-  UseGuards,
-  ParseUUIDPipe,
-} from '@nestjs/common';
-import { InspectionService } from './inspection.service';
-import { ScheduleInspectionDto } from './dto/schedule-inspection.dto';
-import { BatchUpdateChecklistDto } from './dto/update-checklist.dto';
+import { Body, Controller, Get, HttpCode, Param, ParseUUIDPipe, Patch, Post, Query, UseGuards } from '@nestjs/common';
+import { Role } from '@prisma/client';
+import { InspectionFilters, InspectionService } from './inspection.service';
+import { SaveChecklistDraftDto, ScheduleInspectionDto } from './dto/inspection.dto';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { RolesGuard } from '../../common/guards/roles.guard';
-import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { Roles } from '../../common/decorators/roles.decorator';
-import { Role, User } from '@prisma/client';
+import { CurrentUser } from '../../common/decorators/current-user.decorator';
+import { AuthUser } from '../../common/access';
 
 @Controller('inspections')
 @UseGuards(JwtAuthGuard, RolesGuard)
 export class InspectionController {
-  constructor(private readonly inspectionService: InspectionService) {}
+  constructor(private readonly inspections: InspectionService) {}
+
+  /** ?propertyId=&status=SCHEDULED,IN_PROGRESS&unassigned=true (role-scoped) */
+  @Get()
+  list(@CurrentUser() user: AuthUser, @Query() q: InspectionFilters) {
+    return this.inspections.list(user, { propertyId: q.propertyId, status: q.status, unassigned: q.unassigned });
+  }
 
   @Post()
   @Roles(Role.OWNER, Role.ADMIN)
-  async schedule(
-    @CurrentUser() user: Omit<User, 'passwordHash'>,
-    @Body() dto: ScheduleInspectionDto,
-  ) {
-    return this.inspectionService.schedule(user, dto);
-  }
-
-  @Get()
-  async findAll(
-    @CurrentUser() user: Omit<User, 'passwordHash'>,
-    @Query('role') roleQuery?: string,
-  ) {
-    return this.inspectionService.findAll(user, roleQuery);
+  schedule(@CurrentUser() user: AuthUser, @Body() dto: ScheduleInspectionDto) {
+    return this.inspections.schedule(user, dto);
   }
 
   @Get(':id')
-  async findOne(
-    @Param('id', ParseUUIDPipe) id: string,
-    @CurrentUser() user: Omit<User, 'passwordHash'>,
-  ) {
-    return this.inspectionService.findOne(id, user);
+  detail(@Param('id', ParseUUIDPipe) id: string, @CurrentUser() user: AuthUser) {
+    return this.inspections.detail(user, id);
+  }
+
+  @Post(':id/start')
+  @HttpCode(200)
+  @Roles(Role.INSPECTOR)
+  start(@Param('id', ParseUUIDPipe) id: string, @CurrentUser() user: AuthUser) {
+    return this.inspections.start(user, id);
   }
 
   @Patch(':id/checklist')
-  @Roles(Role.INSPECTOR, Role.ADMIN)
-  async updateChecklist(
-    @Param('id', ParseUUIDPipe) id: string,
-    @CurrentUser() user: Omit<User, 'passwordHash'>,
-    @Body() dto: BatchUpdateChecklistDto,
-  ) {
-    return this.inspectionService.updateChecklist(id, user, dto);
+  @Roles(Role.INSPECTOR)
+  saveDraft(@Param('id', ParseUUIDPipe) id: string, @CurrentUser() user: AuthUser, @Body() dto: SaveChecklistDraftDto) {
+    return this.inspections.saveDraft(user, id, dto);
   }
 
   @Post(':id/submit')
-  @Roles(Role.INSPECTOR, Role.ADMIN)
-  async submit(
-    @Param('id', ParseUUIDPipe) id: string,
-    @CurrentUser() user: Omit<User, 'passwordHash'>,
-  ) {
-    return this.inspectionService.submit(id, user);
+  @HttpCode(200)
+  @Roles(Role.INSPECTOR)
+  submit(@Param('id', ParseUUIDPipe) id: string, @CurrentUser() user: AuthUser) {
+    return this.inspections.submit(user, id);
+  }
+
+  @Post(':id/cancel')
+  @HttpCode(200)
+  @Roles(Role.OWNER, Role.ADMIN)
+  cancel(@Param('id', ParseUUIDPipe) id: string, @CurrentUser() user: AuthUser) {
+    return this.inspections.cancel(user, id);
   }
 }

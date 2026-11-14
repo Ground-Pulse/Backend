@@ -6,7 +6,7 @@ export class GroundPulseException extends HttpException {
   constructor(statusCode: HttpStatus, code: string, message: string) {
     super({ statusCode, code, message }, statusCode);
     this.code = code;
-  }
+  } 
 
   static propertyNotFound(message = 'Property not found'): GroundPulseException {
     return new GroundPulseException(HttpStatus.NOT_FOUND, 'PROPERTY_NOT_FOUND', message);
@@ -29,7 +29,7 @@ export class GroundPulseException extends HttpException {
   }
 
   static inspectionAlreadySubmitted(message = 'Inspection has already been submitted'): GroundPulseException {
-    return new GroundPulseException(HttpStatus.BAD_REQUEST, 'INSPECTION_ALREADY_SUBMITTED', message);
+    return new GroundPulseException(HttpStatus.CONFLICT, 'INSPECTION_ALREADY_SUBMITTED', message);
   }
 
   static issueMediaRequired(message = 'At least one photo or media proof is required when flagging an issue'): GroundPulseException {
@@ -37,7 +37,7 @@ export class GroundPulseException extends HttpException {
   }
 
   static issueAlreadyDecided(message = 'This issue has already been approved or declined'): GroundPulseException {
-    return new GroundPulseException(HttpStatus.BAD_REQUEST, 'ISSUE_ALREADY_DECIDED', message);
+    return new GroundPulseException(HttpStatus.CONFLICT, 'ISSUE_ALREADY_DECIDED', message);
   }
 
   static issueNotFound(message = 'Issue not found'): GroundPulseException {
@@ -53,15 +53,39 @@ export class GroundPulseException extends HttpException {
   }
 
   static repairInvalidTransition(message = 'Invalid repair status transition'): GroundPulseException {
-    return new GroundPulseException(HttpStatus.BAD_REQUEST, 'REPAIR_INVALID_TRANSITION', message);
+    return new GroundPulseException(HttpStatus.CONFLICT, 'REPAIR_INVALID_TRANSITION', message);
   }
 
   static emailAlreadyExists(message = 'A user with this email address already exists'): GroundPulseException {
-    return new GroundPulseException(HttpStatus.CONFLICT, 'EMAIL_ALREADY_EXISTS', message);
+    return new GroundPulseException(HttpStatus.CONFLICT, 'EMAIL_TAKEN', message);
   }
 
   static invalidCredentials(message = 'Invalid email or password'): GroundPulseException {
     return new GroundPulseException(HttpStatus.UNAUTHORIZED, 'INVALID_CREDENTIALS', message);
+  }
+
+  static notFound(message = 'Not found'): GroundPulseException {
+    return new GroundPulseException(HttpStatus.NOT_FOUND, 'NOT_FOUND', message);
+  }
+
+  static forbidden(message = "You don't have permission to do that."): GroundPulseException {
+    return new GroundPulseException(HttpStatus.FORBIDDEN, 'FORBIDDEN', message);
+  }
+
+  static validation(message: string): GroundPulseException {
+    return new GroundPulseException(HttpStatus.BAD_REQUEST, 'VALIDATION_ERROR', message);
+  }
+
+  static conflict(code: string, message: string): GroundPulseException {
+    return new GroundPulseException(HttpStatus.CONFLICT, code, message);
+  }
+
+  static inspectorNotVerified(message = 'Only verified inspectors can be assigned'): GroundPulseException {
+    return new GroundPulseException(HttpStatus.FORBIDDEN, 'INSPECTOR_NOT_VERIFIED', message);
+  }
+
+  static completionNoteRequired(message = 'Add a confirmation note before marking this job complete.'): GroundPulseException {
+    return new GroundPulseException(HttpStatus.BAD_REQUEST, 'COMPLETION_NOTE_REQUIRED', message);
   }
 
   static unauthorized(message = 'Unauthorized'): GroundPulseException {

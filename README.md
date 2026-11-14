@@ -60,100 +60,82 @@ backend/
 
 ## 🚀 Getting Started
 
-### 1. Prerequisites
-- Node.js 20+
-- Docker & Docker Compose (or local Postgres & Redis instances)
+Frontend and backend live in **separate repos** and run side by side:
+backend on `http://localhost:3001`, frontend on `http://localhost:3000`.
 
-### 2. Environment Configuration
-Copy `.env.example` to `.env`:
+### 1. Prerequisites
+- Node.js 20+, Docker Desktop (running)
+
+### 2. Environment
 ```bash
 cp .env.example .env
 ```
+Defaults work for local dev. `MEDIA_DRIVER=local` stores uploads in `./uploads`
+(no AWS account needed); set it to `s3` with real credentials for S3/R2.
 
-### 3. Start Database & Redis via Docker
+### 3. Database & Redis
 ```bash
 docker compose up -d
 ```
-This spins up:
-- **PostgreSQL**: `localhost:5432` (`groundpulse` database)
-- **Redis**: `localhost:6379`
 
-### 4. Database Migration & Seeding
+### 4. Migrate & seed
 ```bash
-# Push schema to database
-npx prisma db push
-
-# Or run migrations
-npm run prisma:migrate
-
-# Seed mock data
+npx prisma migrate deploy
 npm run prisma:seed
 ```
+`npm run db:reset` drops everything, re-applies migrations and re-seeds.
 
-### 5. Run Backend
+### 5. Run
 ```bash
-# Development mode with hot-reload
 npm run start:dev
-
-# Production build & start
-npm run build
-npm run start:prod
 ```
-The API server will listen on `http://localhost:3001`.
+
+### 6. Point the frontend at it
+In the frontend repo's `.env.local`:
+```
+NEXT_PUBLIC_USE_MOCK_API=false
+NEXT_PUBLIC_API_BASE_URL=http://localhost:3001
+NEXT_PUBLIC_WS_URL=http://localhost:3001
+```
+then `npm run dev` in the frontend.
 
 ---
 
-## 🔑 Default Seed Credentials
+## 🔑 Seed accounts (password `password123` for all)
 
-| Role | Email | Password | Notes |
-| :--- | :--- | :--- | :--- |
-| **Owner** | `priya@example.com` | `password123` | Owns Prestige Lakeside, Brigade Meadows, Plot 44 |
-| **Inspector** | `ravi@example.com` | `password123` | Assigned to active inspections |
-| **Admin** | `admin@groundpulse.com` | `admin123` | Unrestricted console access |
-| **Provider** | `plumber@express.com` | `password123` | Verified provider (`Express Plumbing & Repairs`) |
+| Role | Email |
+|---|---|
+| Owner | priya@example.com, arvind@example.com |
+| Inspector | ravi@example.com (job today), meera@example.com, karan@example.com (pending verification) |
+| Admin | admin@groundpulse.in |
+| Provider | imran@example.com (job in progress), suresh@, deepa@, ganesh@example.com, joseph@example.com (pending) |
 
 ---
 
-## 📡 API Endpoints Overview
+## 📡 API
 
-### Authentication (`/auth`)
-- `POST /auth/register` — Register User (`name`, `email`, `password`, `role`, `phone`)
-- `POST /auth/login` — Validate credentials, returns `{ accessToken, refreshToken, user }`
-- `POST /auth/refresh` — Issue fresh token pair
-- `GET /auth/me` — Current logged-in user profile
+The response shapes are exactly what the frontend's `src/lib/types.ts` expects;
+all mapping lives in `src/common/views.ts`. Errors are `{ statusCode, code, message }`.
 
-### Properties (`/properties`)
-- `GET /properties` — Scoped by `ownerId` (or all for Admin)
-- `POST /properties` — Create property (`address`, `type`, `coverPhotoUrl`)
-- `GET /properties/:id` — Property details, recent inspections, and active issues
-- `PATCH /properties/:id` — Update property details (Owner / Admin)
+| Area | Endpoints |
+|---|---|
+| Auth | `POST /auth/register` `POST /auth/login` `POST /auth/refresh` `GET /auth/me` `POST /auth/logout` |
+| Account | `PATCH /users/me` `GET\|PATCH /users/me/preferences` |
+| Properties | `GET\|POST /properties` `GET\|PATCH /properties/:id` `POST /properties/:id/archive` `GET /properties/:id/health-history` `GET\|POST /properties/:id/documents` `DELETE /documents/:id` |
+| Inspections | `GET\|POST /inspections` (`?propertyId&status&unassigned`) `GET /inspections/:id` `POST /inspections/:id/start` `PATCH /inspections/:id/checklist` `POST /inspections/:id/submit` `POST /inspections/:id/cancel` |
+| Issues | `GET\|POST /issues` `GET /issues/:id` `POST /issues/:id/approve` `POST /issues/:id/decline` `GET\|POST /issues/:id/messages` |
+| Repairs | `GET /repairs?status=` `POST /repairs/:id/assign` `PATCH /repairs/:id/status` `POST /repairs/:id/decline` `POST /repairs/:id/complete` `POST /repairs/:id/rate` |
+| Providers | `GET /providers?verified&locality&serviceType` `GET /providers/me` |
+| Admin | `GET /admin/dashboard` `POST /admin/reassign` `GET /admin/verification` `POST /admin/verification/:userId/approve\|reject` `GET /admin/audit-logs` `GET /inspectors` `GET /templates` `PUT /templates/:id` |
+| Notifications | `GET /notifications` `PATCH /notifications/:id/read` `POST /notifications/read-all` |
+| Media | `POST /media/presign` → `{ uploadUrl, publicUrl }` (`PUT /media/upload/:key` + `/uploads/*` with the local driver) |
 
-### Inspections (`/inspections`)
-- `POST /inspections` — Schedule inspection (`propertyId`, `scheduledDate`, `recurrenceRule`). Validates future date.
-- `GET /inspections?role=owner|inspector` — Role-scoped inspections list
-- `GET /inspections/:id` — Inspection details with checklist items
-- `PATCH /inspections/:id/checklist` — Batch update checklist item drafts without locking
-- `POST /inspections/:id/submit` — Validates all checklist items are non-null (`PASS`, `FAIL`, `ATTENTION`), marks `SUBMITTED`, enqueues BullMQ report generation
-
-### Issues & Repairs (`/issues`, `/repairs`)
-- `POST /issues` — Inspector flags an issue (`category`, `description`, `mediaUrls`). Emits `issue.flagged` and notifies owner.
-- `GET /issues/:id` — Fetch issue details
-- `POST /issues/:id/approve` — Owner approves issue; atomically creates `Repair` (`REQUESTED`)
-- `POST /issues/:id/decline` — Owner declines issue with `decisionReason`
-- `POST /repairs/:id/assign` — Admin assigns provider. **Enforces `service_providers.verified === true`**.
-- `PATCH /repairs/:id/status` — State machine transition (`REQUESTED` → `ASSIGNED` → `IN_PROGRESS` → `COMPLETED`)
-- `POST /repairs/:id/complete` — Provider marks complete with `completionNotes` and `completionPhotos`
-
-### Admin Console (`/admin`)
-- `GET /admin/dashboard` — Live counts (`activeProperties`, `pendingInspections`, `openIssues`, `inProgressRepairs`)
-- `POST /admin/reassign` — Reassign inspector or verified provider
-
-### Media Pre-Signed URLs (`/media`)
-- `POST /media/presign-upload` — Generates 15-minute AWS S3 pre-signed PUT URL with MIME type validation
-
-### Notifications (`/notifications`)
-- `GET /notifications` — User notifications list sorted descending
-- `PATCH /notifications/:id/read` — Mark notification as read
+Business rules enforced server-side: role scoping on every query, verified-only
+assignment (`PROVIDER_NOT_VERIFIED`, `INSPECTOR_NOT_VERIFIED`), repair state
+machine (`REPAIR_INVALID_TRANSITION`), future dates only, complete checklist
+before submit, ≥1 photo per issue, an audit row in the same transaction as every
+state change, report generation + inspector auto-assignment as BullMQ jobs, and
+recurring inspections spawning the next one.
 
 ---
 
@@ -172,6 +154,8 @@ socket.on('notification.new', (data) => console.log('New notification:', data));
 socket.on('repair.status.updated', (data) => console.log('Repair updated:', data));
 socket.on('issue.flagged', (data) => console.log('Issue flagged:', data));
 socket.on('report.ready', (data) => console.log('Report ready:', data));
+socket.on('inspection.updated', (data) => console.log('Inspection updated:', data));
+socket.on('dashboard.changed', () => console.log('Admin counts changed'));
 ```
 
 ---

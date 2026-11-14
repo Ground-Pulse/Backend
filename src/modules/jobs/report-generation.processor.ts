@@ -1,126 +1,98 @@
 import { Processor, WorkerHost } from '@nestjs/bullmq';
 import { Job } from 'bullmq';
 import { Logger } from '@nestjs/common';
+import { Prisma } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
 import { NotificationService } from '../notification/notification.service';
-import { NotificationGateway } from '../notification/notification.gateway';
-import { CheckStatus, Prisma } from '@prisma/client';
+import { writeAudit } from '../../common/audit';
+import {
+  createInspectionWithChecklist,
+  nextDateFromRule,
+  QUEUE_REPORTS,
+  scoreFromStatuses,
+} from '../inspection/inspection.factory';
 
 export interface ReportGenerationJobData {
   inspectionId: string;
 }
 
-@Processor('reports')
+/**
+ * Report job (TR-007): runs off the request path after a checklist is
+ * submitted. Compiles the report, recomputes the property's health score
+ * (TR-014), spawns the next recurring inspection and notifies the owner.
+ */
+@Processor(QUEUE_REPORTS)
 export class ReportGenerationProcessor extends WorkerHost {
   private readonly logger = new Logger(ReportGenerationProcessor.name);
 
   constructor(
     private prisma: PrismaService,
-    private notificationService: NotificationService,
-    private gateway: NotificationGateway,
+    private notifications: NotificationService,
   ) {
     super();
   }
 
-  async process(job: Job<ReportGenerationJobData>): Promise<any> {
+  async process(job: Job<ReportGenerationJobData>) {
     const { inspectionId } = job.data;
-    this.logger.log(`[BullMQ] Processing generate-report for inspection: ${inspectionId}`);
-
-    const inspection = await this.prisma.inspection.findUnique({
+    const ins = await this.prisma.inspection.findUnique({
       where: { id: inspectionId },
-      include: {
-        property: true,
-        checklistItems: true,
-      },
+      include: { property: true, checklistItems: { select: { status: true } }, report: true, _count: { select: { issues: true } } },
     });
-
-    if (!inspection) {
-      this.logger.error(`Inspection ${inspectionId} not found during report generation`);
+    if (!ins) {
+      this.logger.warn(`Inspection ${inspectionId} vanished before report generation`);
       return;
     }
+    if (ins.report) return { reportId: ins.report.id, skipped: true }; // idempotent on retries
 
-    const items = inspection.checklistItems;
-    const total = items.length;
-
-    let healthScore: number | null = null;
-
-    if (total > 0) {
-      const passCount = items.filter((i) => i.status === CheckStatus.PASS).length;
-      const attentionCount = items.filter((i) => i.status === CheckStatus.ATTENTION).length;
-      // Formula: ((pass * 1.0 + attention * 0.5) / total) * 100
-      const calculated = ((passCount * 1.0 + attentionCount * 0.5) / total) * 100;
-      healthScore = Math.round(calculated * 100) / 100;
-    }
-
-    // Upsert or create InspectionReport
-    const summaryUrl = `https://groundpulse-media-dev.s3.ap-south-1.amazonaws.com/reports/report-${inspectionId}.pdf`;
+    const statuses = ins.checklistItems.map((c) => c.status);
+    const score = scoreFromStatuses(statuses);
+    const appUrl = process.env.APP_URL || 'http://localhost:3000';
 
     const report = await this.prisma.$transaction(async (tx) => {
-      const rep = await tx.inspectionReport.upsert({
-        where: { inspectionId },
-        update: {
-          summaryUrl,
-          generatedAt: new Date(),
-        },
-        create: {
-          inspectionId,
-          summaryUrl,
-          generatedAt: new Date(),
-        },
-      });
-
-      if (healthScore !== null) {
-        await tx.property.update({
-          where: { id: inspection.propertyId },
-          data: { healthScore: new Prisma.Decimal(healthScore) },
-        });
-      }
-
-      await tx.auditLog.create({
+      const rep = await tx.inspectionReport.create({
         data: {
-          entityType: 'INSPECTION_REPORT',
-          entityId: rep.id,
-          action: 'GENERATED',
-          actorId: inspection.inspectorId || inspection.property.ownerId,
-          metadata: {
-            inspectionId,
-            healthScore,
-            summaryUrl,
-          },
+          inspectionId,
+          summaryUrl: `${appUrl}/report/${inspectionId}`,
+          healthScore: score,
+          passCount: statuses.filter((s) => s === 'PASS').length,
+          attentionCount: statuses.filter((s) => s === 'ATTENTION').length,
+          failCount: statuses.filter((s) => s === 'FAIL').length,
         },
       });
+      await tx.property.update({ where: { id: ins.propertyId }, data: { healthScore: new Prisma.Decimal(score) } });
+      await writeAudit(tx, 'Inspection', inspectionId, 'REPORT_GENERATED', null, { healthScore: score, actorName: 'Report job' });
 
+      if (ins.recurrenceRule) {
+        const next = nextDateFromRule(ins.recurrenceRule, ins.scheduledDate);
+        if (next) {
+          await createInspectionWithChecklist(tx, {
+            propertyId: ins.propertyId,
+            propertyType: ins.property.type,
+            scheduledDate: next,
+            recurrenceRule: ins.recurrenceRule,
+            inspectorId: ins.inspectorId,
+          });
+        }
+      }
       return rep;
     });
 
-    // Notify Owner
-    const ownerId = inspection.property.ownerId;
-    const notificationPayload = {
-      inspectionId,
-      propertyId: inspection.propertyId,
-      propertyName: inspection.property.address,
-      reportUrl: summaryUrl,
-      healthScore,
-      message: `Inspection report generated for ${inspection.property.address}. Calculated health score: ${healthScore !== null ? `${healthScore}%` : 'N/A'}.`,
-    };
-
-    await this.notificationService.createNotification(
-      ownerId,
+    const issues = ins._count.issues;
+    await this.notifications.notify(
+      ins.property.ownerId,
       'REPORT_READY',
-      notificationPayload,
-      true,
+      'Inspection report ready',
+      `${ins.property.name}: health score ${score}/100${issues ? `, ${issues} issue${issues > 1 ? 's' : ''} flagged` : ', no issues found'}.`,
+      `/report/${inspectionId}`,
     );
+    await this.notifications.emitWithAdmins([ins.property.ownerId, ins.inspectorId], 'report.ready', {
+      inspectionId,
+      reportUrl: `/report/${inspectionId}`,
+      propertyId: ins.propertyId,
+    });
+    await this.notifications.dashboardChanged();
 
-    this.gateway.emitReportReady(inspectionId, summaryUrl, ownerId);
-
-    this.logger.log(
-      `[BullMQ] Successfully completed report generation for inspection ${inspectionId}. Health score: ${healthScore}`,
-    );
-
-    return {
-      reportId: report.id,
-      healthScore,
-      summaryUrl,
-    };
+    this.logger.log(`Report ${report.id} generated for inspection ${inspectionId} (score ${score})`);
+    return { reportId: report.id, healthScore: score };
   }
 }

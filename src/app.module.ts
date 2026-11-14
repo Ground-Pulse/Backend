@@ -51,7 +51,8 @@ import { TransformInterceptor } from './common/interceptors/transform.intercepto
     ThrottlerModule.forRoot([
       {
         ttl: 60000,
-        limit: 100,
+        // dashboards fire several queries per screen; auth routes have their own stricter limit
+        limit: Number(process.env.RATE_LIMIT_PER_MINUTE || 600),
       },
     ]),
 
