@@ -2,8 +2,7 @@
 #   Postgres (database) + Key Value/Redis (BullMQ queues) + the NestJS API.
 # Render dashboard → New → Blueprint → pick this repo.
 #
-# After the frontend is on Vercel, set ALLOWED_ORIGINS and APP_URL on the
-# groundpulse-api service to the Vercel URL (Environment tab).
+# Frontend: https://groundpulse-web.vercel.app (Vercel project groundpulse-web)
 
 databases:
   - name: groundpulse-db
@@ -52,11 +51,11 @@ services:
         value: 7d
       - key: SEED_ONLY_IF_EMPTY
         value: "true"
-      # Your Vercel URL(s), comma-separated. Wildcards allowed for previews.
+      # Frontend URL(s), comma-separated. One-label wildcards allowed (previews).
       - key: ALLOWED_ORIGINS
-        value: https://*.vercel.app
+        value: https://groundpulse-web.vercel.app,https://groundpulse-*-vikash7485s-projects.vercel.app
       - key: APP_URL
-        sync: false
+        value: https://groundpulse-web.vercel.app
       # Free instances have no persistent disk: local uploads are lost on
       # redeploy. Switch to MEDIA_DRIVER=s3 + AWS_* / S3_BUCKET for real use.
       - key: MEDIA_DRIVER
