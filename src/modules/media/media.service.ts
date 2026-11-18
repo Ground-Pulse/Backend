@@ -31,14 +31,28 @@ export class MediaService {
 
   constructor(private config: ConfigService) {
     const accessKey = config.get<string>('AWS_ACCESS_KEY_ID');
-    this.driver = (config.get<string>('MEDIA_DRIVER') as 'local' | 's3') || (!accessKey || accessKey === 'test' ? 'local' : 's3');
+    const secretKey = config.get<string>('AWS_SECRET_ACCESS_KEY');
+    const hasKeys = !!accessKey && accessKey !== 'test' && !!secretKey;
+    const wanted = (config.get<string>('MEDIA_DRIVER') as 'local' | 's3') || (hasKeys ? 's3' : 'local');
+    if (wanted === 's3' && !hasKeys) {
+      this.logger.warn('MEDIA_DRIVER=s3 but AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY are missing — falling back to local uploads');
+    }
+    this.driver = wanted === 's3' && hasKeys ? 's3' : 'local';
     this.region = config.get<string>('AWS_REGION') || 'ap-south-1';
     this.bucket = config.get<string>('S3_BUCKET') || 'groundpulse-media-dev';
     this.uploadDir = path.resolve(config.get<string>('UPLOAD_DIR') || 'uploads');
     if (this.driver === 's3') {
+      // S3_ENDPOINT enables S3-compatible stores, e.g. Cloudflare R2:
+      //   https://<ACCOUNT_ID>.r2.cloudflarestorage.com  (with AWS_REGION=auto)
+      const endpoint = config.get<string>('S3_ENDPOINT') || undefined;
       this.s3 = new S3Client({
         region: this.region,
-        credentials: { accessKeyId: accessKey!, secretAccessKey: config.get<string>('AWS_SECRET_ACCESS_KEY') || '' },
+        endpoint,
+        credentials: { accessKeyId: accessKey!, secretAccessKey: secretKey! },
+        // Browser PUTs to a presigned URL can't send the SDK's automatic CRC32
+        // checksum, so only add checksums when the operation requires them.
+        requestChecksumCalculation: 'WHEN_REQUIRED',
+        responseChecksumValidation: 'WHEN_REQUIRED',
       });
     }
     this.logger.log(`Media driver: ${this.driver}`);
