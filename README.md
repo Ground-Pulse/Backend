@@ -2,6 +2,15 @@
 
 Production-ready backend for **GroundPulse** (Smart Remote Property Monitoring & Maintenance Platform), built with NestJS 10, TypeScript 5.4+, PostgreSQL 15, Prisma ORM, CASL RBAC, BullMQ background jobs, and real-time Socket.IO gateways.
 
+## 🌐 Live Demo
+
+| | |
+|---|---|
+| **API** | https://groundpulse-api.onrender.com (health check: [`/health`](https://groundpulse-api.onrender.com/health)) |
+| **Website** | https://groundpulse-web.vercel.app ([source](https://github.com/Ground-Pulse/Frontend)) |
+
+Hosted on Render's free plan (API + PostgreSQL + Redis from `render.yaml`): it sleeps after 15 minutes idle, so the first request can take ~50 seconds.
+
 ---
 
 ## 🛠 Tech Stack
