@@ -16,7 +16,7 @@ import { AdminModule } from './modules/admin/admin.module';
 import { MediaModule } from './modules/media/media.module';
 import { JobsModule } from './modules/jobs/jobs.module';
 import { TransformInterceptor } from './common/interceptors/transform.interceptor';
-import { HealthController } from './health.controller';
+import { HealthController, RootController } from './health.controller';
 
 @Module({
   imports: [
@@ -111,7 +111,7 @@ import { HealthController } from './health.controller';
     MediaModule,
     JobsModule,
   ],
-  controllers: [HealthController],
+  controllers: [RootController, HealthController],
   providers: [
     {
       provide: APP_GUARD,
