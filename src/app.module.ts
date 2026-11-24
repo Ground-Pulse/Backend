@@ -23,7 +23,10 @@ import { HealthController } from './health.controller';
     // Configuration
     ConfigModule.forRoot({
       isGlobal: true,
-      envFilePath: ['.env', '.env.example'],
+      // Only the real .env. .env.example is a template: loading it as a
+      // fallback leaked placeholder values (e.g. API_PUBLIC_URL=localhost)
+      // into production, where Render provides the real settings.
+      envFilePath: ['.env'],
     }),
 
     // Pino Logger
