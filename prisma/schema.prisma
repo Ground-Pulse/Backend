@@ -8,6 +8,8 @@ datasource db {
 
 generator client {
   provider = "prisma-client-js"
+  // explicit output: always the project's node_modules, never a nested copy
+  output   = "../node_modules/.prisma/client"
 }
 
 enum Role {
@@ -289,4 +291,19 @@ model AuditLog {
 
   @@index([entityType, entityId])
   @@map("audit_logs")
+}
+
+/// Uploaded photos/videos/PDFs when MEDIA_DRIVER=db (default without S3 keys).
+/// Stored in Postgres so they survive restarts of hosts without a persistent
+/// disk (e.g. Render free plan). Served at GET /media/file/:id.
+model MediaFile {
+  id          String   @id // the upload key, e.g. 77f8c578-1795512262520-<uuid>.jpg
+  ownerId     String   @map("owner_id") @db.Uuid
+  contentType String   @map("content_type")
+  size        Int
+  data        Bytes
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  @@index([ownerId])
+  @@map("media_files")
 }

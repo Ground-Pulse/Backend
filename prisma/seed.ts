@@ -76,6 +76,7 @@ async function main() {
     prisma.userPreference.deleteMany(),
     prisma.user.deleteMany(),
     prisma.checklistTemplate.deleteMany(),
+    prisma.mediaFile.deleteMany(),
   ]);
 
   await prisma.checklistTemplate.createMany({

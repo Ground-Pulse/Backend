@@ -56,10 +56,11 @@ services:
         value: https://groundpulse-web.vercel.app,https://groundpulse-*-vikash7485s-projects.vercel.app
       - key: APP_URL
         value: https://groundpulse-web.vercel.app
-      # Free instances have no persistent disk: local uploads are lost on
-      # redeploy. Switch to MEDIA_DRIVER=s3 + AWS_* / S3_BUCKET for real use.
+      # Uploads are stored in Postgres (media_files) so they survive restarts
+      # on the free plan, which has no persistent disk. Use MEDIA_DRIVER=s3
+      # with AWS_* / S3_BUCKET / S3_ENDPOINT for large-scale storage.
       - key: MEDIA_DRIVER
-        value: local
+        value: db
       - key: RATE_LIMIT_PER_MINUTE
         value: "600"
       # Email via Resend SMTP (free: 3,000/month). Without a verified domain,
